@@ -114,3 +114,24 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df["has_prev_stay"] = (df["no_of_previous_bookings_not_canceled"] > 0).astype(int)
 
     return df
+
+# Overbooking costs, as multiples of the revenue of the stay.
+MISSED_CANCELLATION_COST = 1.0  # false negative: the room stays empty
+FALSE_ALARM_COST = 1.5  # false positive: overbooked guest must be relocated
+
+
+def stay_value(df: pd.DataFrame) -> pd.Series:
+    """Revenue of a booking: room price times number of nights."""
+    total_nights = df["no_of_weekend_nights"] + df["no_of_week_nights"]
+    return df["avg_price_per_room"] * total_nights
+
+
+def business_cost(y_true, y_pred, value) -> float:
+    """Total cost in euros of the model's mistakes. Correct predictions cost 0."""
+    y_true, y_pred, value = np.asarray(y_true), np.asarray(y_pred), np.asarray(value)
+    missed = (y_true == 1) & (y_pred == 0)
+    false_alarm = (y_true == 0) & (y_pred == 1)
+    return float(
+        MISSED_CANCELLATION_COST * value[missed].sum()
+        + FALSE_ALARM_COST * value[false_alarm].sum()
+    )
