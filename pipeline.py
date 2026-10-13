@@ -7,6 +7,7 @@ same way whether it is used for training or for a prediction in the app.
 
 import numpy as np
 import pandas as pd
+from torch import nn
 
 MAX_CHILDREN = 3
 
@@ -19,10 +20,6 @@ NUMERIC_FEATURES = [
     "log_lead_time",
     "log_total_nights",
     "weekend_share",
-    "arrival_month_sin",
-    "arrival_month_cos",
-    "booking_month_sin",
-    "booking_month_cos",
 ]
 BINARY_FEATURES = [
     "required_car_parking_space",
@@ -83,12 +80,6 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _month_on_circle(month: pd.Series) -> tuple[pd.Series, pd.Series]:
-    """Place months 1 to 12 on a circle so December sits next to January."""
-    angle = 2 * np.pi * (month - 1) / 12
-    return np.sin(angle), np.cos(angle)
-
-
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     """Build model features from a cleaned table. Uses each row on its own,
     so nothing is learned from the data and it is safe on any split."""
@@ -102,10 +93,9 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     # Share of the stay that falls on the weekend (0 for zero-night bookings).
     df["weekend_share"] = (df["no_of_weekend_nights"] / total_nights.replace(0, np.nan)).fillna(0)
 
-    # Seasonality of the arrival, and of the moment the booking was made.
-    df["arrival_month_sin"], df["arrival_month_cos"] = _month_on_circle(df["arrival"].dt.month)
-    booking_date = df["arrival"] - pd.to_timedelta(df["lead_time"], unit="D")
-    df["booking_month_sin"], df["booking_month_cos"] = _month_on_circle(booking_date.dt.month)
+    # No month features: with only one year of data, the model cannot tell a
+    # seasonal pattern from a change between years (Oct to Dec cancellations
+    # were 10% in 2017 but 36% in 2018), and on validation they made it worse.
 
     df["arrival_weekday"] = df["arrival"].dt.day_name()
 
@@ -135,3 +125,16 @@ def business_cost(y_true, y_pred, value) -> float:
         MISSED_CANCELLATION_COST * value[missed].sum()
         + FALSE_ALARM_COST * value[false_alarm].sum()
     )
+
+
+class CancellationModel(nn.Module):
+    """Logistic regression as a PyTorch module: one linear layer that returns
+    scores (logits). Lives here so app.py can rebuild it to load saved weights."""
+
+    def __init__(self, n_features: int):
+        super().__init__()
+        self.linear = nn.Linear(n_features, 1)
+
+    def forward(self, x):
+        # Returns scores; the sigmoid is applied by the loss or at prediction time.
+        return self.linear(x).squeeze(1)
